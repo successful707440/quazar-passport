@@ -7,6 +7,9 @@ import 'providers/online_provider.dart';
 import 'providers/structure_provider.dart';
 import 'providers/exchange_provider.dart';
 import 'providers/candidacy_provider.dart';
+import 'providers/chat_provider.dart';
+import 'providers/initiative_provider.dart';
+import 'providers/referendum_provider.dart';
 import 'providers/node_provider.dart';
 import 'services/api_service.dart';
 import 'screens/login_screen.dart';
@@ -31,6 +34,9 @@ class QuazarPassportApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => StructureProvider()),
         ChangeNotifierProvider(create: (_) => ExchangeProvider()),
         ChangeNotifierProvider(create: (_) => CandidacyProvider()),
+        ChangeNotifierProvider(create: (_) => ChatProvider()),
+        ChangeNotifierProvider(create: (_) => InitiativeProvider()),
+        ChangeNotifierProvider(create: (_) => ReferendumProvider()),
       ],
       child: MaterialApp(
         title: 'Quazar Passport',

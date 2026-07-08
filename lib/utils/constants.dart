@@ -33,6 +33,17 @@ class Constants {
   static const String endpointCandidacy = '/candidacy';
   static const String endpointCandidacyNominate = '/candidacy/nominate';
 
+  static const String endpointInitiativeList = '/initiative/list';
+  static const String endpointInitiative = '/initiative';
+  static const String endpointInitiativePropose = '/initiative/propose';
+
+  static const String endpointReferendumList = '/referendum/list';
+  static const String endpointReferendum = '/referendum';
+  static const String endpointReferendumAnnounce = '/referendum/announce';
+
+  static const String endpointChatMessages = '/chat/messages';
+  static const String endpointChatSend = '/chat/send';
+
   /// Внутренняя валюта государства Квазар
   static const String currencyName = 'Квази';
 

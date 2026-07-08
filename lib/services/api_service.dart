@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/api_response.dart';
+import '../models/initiative.dart';
+import '../models/referendum.dart';
 import '../models/candidacy.dart';
+import '../models/chat_message.dart';
 import '../models/exchange.dart';
 import '../models/citizen.dart';
 import '../models/event.dart';
@@ -732,6 +735,152 @@ class ApiService {
       apiKey: apiKey,
     );
     return Candidacy.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  static Future<List<Initiative>> listInitiatives({String? status}) async {
+    final query = <String, String>{};
+    if (status != null && status.isNotEmpty) query['status'] = status;
+
+    final response = await _get(
+      Constants.endpointInitiativeList,
+      query: query.isEmpty ? null : query,
+    );
+
+    final data = response.data;
+    if (data is! Map<String, dynamic>) return [];
+
+    final raw = data['initiatives'] as List<dynamic>? ?? [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(Initiative.fromJson)
+        .toList();
+  }
+
+  static Future<Initiative> getInitiative(String id) async {
+    final response = await _get('${Constants.endpointInitiative}/$id');
+    return Initiative.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  static Future<Initiative> proposeInitiative(
+    String apiKey, {
+    required String title,
+    required String description,
+  }) async {
+    final response = await _post(
+      Constants.endpointInitiativePropose,
+      apiKey: apiKey,
+      body: {
+        'title': title,
+        'description': description,
+      },
+    );
+    return Initiative.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  static Future<Initiative> voteOnInitiative(
+    String apiKey,
+    String initiativeId,
+    String vote,
+  ) async {
+    final response = await _post(
+      '${Constants.endpointInitiative}/$initiativeId/vote',
+      apiKey: apiKey,
+      body: {'vote': vote},
+    );
+    return Initiative.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  static Future<List<Referendum>> listReferendums({String? status}) async {
+    final query = <String, String>{};
+    if (status != null && status.isNotEmpty) query['status'] = status;
+
+    final response = await _get(
+      Constants.endpointReferendumList,
+      query: query.isEmpty ? null : query,
+    );
+
+    final data = response.data;
+    if (data is! Map<String, dynamic>) return [];
+
+    final raw = data['referendums'] as List<dynamic>? ?? [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(Referendum.fromJson)
+        .toList();
+  }
+
+  static Future<Referendum> getReferendum(String id) async {
+    final response = await _get('${Constants.endpointReferendum}/$id');
+    return Referendum.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  static Future<Referendum> announceReferendum(
+    String apiKey, {
+    required String title,
+    required String description,
+    required String targetDecision,
+  }) async {
+    final response = await _post(
+      Constants.endpointReferendumAnnounce,
+      apiKey: apiKey,
+      body: {
+        'title': title,
+        'description': description,
+        'target_decision': targetDecision,
+      },
+    );
+    return Referendum.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  static Future<Referendum> voteOnReferendum(
+    String apiKey,
+    String referendumId,
+    String vote,
+  ) async {
+    final response = await _post(
+      '${Constants.endpointReferendum}/$referendumId/vote',
+      apiKey: apiKey,
+      body: {'vote': vote},
+    );
+    return Referendum.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  static Future<List<ChatMessage>> listChatMessages(
+    String apiKey, {
+    int limit = 50,
+    String? before,
+  }) async {
+    final query = <String, String>{'limit': limit.toString()};
+    if (before != null && before.isNotEmpty) {
+      query['before'] = before;
+    }
+
+    final response = await _get(
+      Constants.endpointChatMessages,
+      apiKey: apiKey,
+      query: query,
+    );
+
+    final data = response.data;
+    if (data is! Map<String, dynamic>) return [];
+
+    final raw = data['messages'] as List<dynamic>? ?? [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(ChatMessage.fromJson)
+        .toList();
+  }
+
+  static Future<ChatMessage> sendChatMessage(
+    String apiKey,
+    String content,
+  ) async {
+    final response = await _post(
+      Constants.endpointChatSend,
+      apiKey: apiKey,
+      body: {'content': content},
+    );
+    return ChatMessage.fromJson(response.data as Map<String, dynamic>);
   }
 
   static Future<String> createExchangeOrder(

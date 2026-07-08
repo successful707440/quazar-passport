@@ -5,12 +5,14 @@ import '../providers/events_provider.dart';
 import '../providers/votes_provider.dart';
 import '../providers/online_provider.dart';
 import '../providers/exchange_provider.dart';
+import '../providers/chat_provider.dart';
 import '../widgets/online_indicator.dart';
 import '../widgets/node_switch_indicator.dart';
 import 'events_screen.dart';
 import 'voting_screen.dart';
 import 'passport_screen.dart';
 import 'exchange_screen.dart';
+import 'chat_screen.dart';
 import 'settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -25,6 +27,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   final List<Widget> _screens = const [
     EventsScreen(),
+    ChatScreen(),
     VotingScreen(),
     PassportScreen(),
     ExchangeScreen(),
@@ -33,6 +36,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   final List<String> _titles = [
     'Лента событий',
+    'Чат',
     'Голосования',
     'Паспорт',
     'Биржа',
@@ -63,9 +67,12 @@ class _HomeScreenState extends State<HomeScreen> {
         Provider.of<EventsProvider>(context, listen: false).loadEvents(auth);
         break;
       case 1:
+        Provider.of<ChatProvider>(context, listen: false).loadMessages(auth);
+        break;
+      case 2:
         Provider.of<VotesProvider>(context, listen: false).loadVotes(auth);
         break;
-      case 3:
+      case 4:
         Provider.of<ExchangeProvider>(context, listen: false).loadAll(auth);
         break;
     }
@@ -113,7 +120,10 @@ class _HomeScreenState extends State<HomeScreen> {
           const NodeSwitchIndicator(),
           const OnlineIndicator(),
           const SizedBox(width: 8),
-          if (_currentIndex == 0 || _currentIndex == 1 || _currentIndex == 3)
+          if (_currentIndex == 0 ||
+              _currentIndex == 1 ||
+              _currentIndex == 2 ||
+              _currentIndex == 4)
             IconButton(
               icon: const Icon(Icons.refresh),
               onPressed: _refreshCurrentTab,
@@ -131,7 +141,7 @@ class _HomeScreenState extends State<HomeScreen> {
           setState(() {
             _currentIndex = index;
           });
-          if (index == 3) {
+          if (index == 4) {
             final auth = Provider.of<AuthProvider>(context, listen: false);
             Provider.of<ExchangeProvider>(context, listen: false).loadAll(auth);
           }
@@ -140,6 +150,10 @@ class _HomeScreenState extends State<HomeScreen> {
           NavigationDestination(
             icon: Icon(Icons.list_alt),
             label: 'События',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.chat_bubble_outline),
+            label: 'Чат',
           ),
           NavigationDestination(
             icon: Icon(Icons.how_to_vote),
