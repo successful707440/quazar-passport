@@ -1,0 +1,44 @@
+name: quazar_passport
+description: Official Quazar Digital State Passport Application
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # UI & State Management
+  provider: ^6.1.1
+  
+  # Networking
+  http: ^1.1.0
+  web_socket_channel: ^2.4.0
+  
+  # Storage & Security
+  flutter_secure_storage: ^9.0.0
+  shared_preferences: ^2.2.2
+  
+  # QR Code & Scanner
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^3.5.5
+  
+  # Utilities
+  intl: ^0.18.1
+  share_plus: ^7.2.1
+  local_auth: ^2.1.6
+  
+  # Navigation
+  go_router: ^13.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/

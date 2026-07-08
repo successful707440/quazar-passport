@@ -1,0 +1,343 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../utils/config.dart';
+
+class NodeProvider extends ChangeNotifier {
+  static NodeProvider? _instance;
+
+  static const Duration requestTimeout = Duration(seconds: 4);
+  static const Duration unavailableTtl = Duration(seconds: 30);
+  static const String _keyLastNode = 'last_active_node';
+  static const String _keyDeadUntil = 'dead_nodes_until';
+
+  /// Активный узел для API-запросов.
+  static String get currentNode =>
+      _instance?._currentNode ?? Config.knownNodes.first;
+
+  static NodeProvider? get instance => _instance;
+
+  String? _currentNode;
+  bool _isSwitching = false;
+  bool _isInitialized = false;
+  bool _allNodesOffline = false;
+  String _switchingMessage = 'Поиск доступного узла...';
+  final Map<String, DateTime> _unavailableUntil = {};
+  List<String> _reachableNodes = [];
+  bool _scanningNodes = false;
+  String? _lastCheckError;
+
+  String get activeNode => _currentNode ?? Config.knownNodes.first;
+  String? get lastCheckError => _lastCheckError;
+
+  String get unavailableMessage {
+    if (_lastCheckError != null) {
+      return 'Узлы недоступны: $_lastCheckError';
+    }
+    return 'Узлы недоступны. Подключитесь к Wi‑Fi (192.168.0.x) и проверьте адреса в настройках';
+  }
+  bool get isSwitching => _isSwitching;
+  bool get isInitialized => _isInitialized;
+  bool get allNodesOffline => _allNodesOffline;
+  String get switchingMessage => _switchingMessage;
+  List<String> get reachableNodes => List.unmodifiable(_reachableNodes);
+  bool get scanningNodes => _scanningNodes;
+
+  String get nodeLabel {
+    try {
+      final uri = Uri.parse(activeNode);
+      if (uri.port != 80 && uri.port != 443) {
+        return ':${uri.port}';
+      }
+      return uri.host;
+    } catch (_) {
+      return activeNode;
+    }
+  }
+
+  NodeProvider() {
+    _instance = this;
+  }
+
+  Future<void> initialize() async {
+    if (_isInitialized) return;
+
+    await _loadPersistedState();
+    await findAndSwitchToAvailable(showSwitching: true);
+    _isInitialized = true;
+    notifyListeners();
+  }
+
+  /// Перед логином или API-запросом — убедиться, что выбран живой узел.
+  Future<bool> ensureAvailableNode({bool showSwitching = true}) async {
+    if (!_isInitialized) {
+      await initialize();
+    }
+
+    if (!_isMarkedUnavailable(activeNode) && await checkNode(activeNode)) {
+      _allNodesOffline = false;
+      return true;
+    }
+
+    markUnavailable(activeNode);
+    return findAndSwitchToAvailable(showSwitching: showSwitching);
+  }
+
+  Future<void> _loadPersistedState() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final last = prefs.getString(_keyLastNode);
+    if (last != null && Config.knownNodes.contains(last)) {
+      _currentNode = last;
+    } else {
+      _currentNode = Config.knownNodes.first;
+    }
+
+    final deadJson = prefs.getString(_keyDeadUntil);
+    if (deadJson == null) return;
+
+    try {
+      final map = jsonDecode(deadJson) as Map<String, dynamic>;
+      final now = DateTime.now();
+      for (final entry in map.entries) {
+        final until = DateTime.fromMillisecondsSinceEpoch(entry.value as int);
+        if (now.isBefore(until)) {
+          _unavailableUntil[entry.key] = until;
+        }
+      }
+    } catch (_) {
+      // ignore corrupt cache
+    }
+  }
+
+  Future<void> _persistState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (_currentNode != null) {
+        await prefs.setString(_keyLastNode, _currentNode!);
+      }
+      final dead = <String, int>{
+        for (final e in _unavailableUntil.entries)
+          e.key: e.value.millisecondsSinceEpoch,
+      };
+      await prefs.setString(_keyDeadUntil, jsonEncode(dead));
+    } catch (e) {
+      debugPrint('NodeProvider persist error: $e');
+    }
+  }
+
+  void markUnavailable(String node) {
+    _unavailableUntil[node] = DateTime.now().add(unavailableTtl);
+    unawaited(_persistState());
+  }
+
+  void markAvailable(String node) {
+    _unavailableUntil.remove(node);
+    unawaited(_persistState());
+  }
+
+  bool _isMarkedUnavailable(String node) {
+    final until = _unavailableUntil[node];
+    if (until == null) return false;
+    if (DateTime.now().isAfter(until)) {
+      _unavailableUntil.remove(node);
+      unawaited(_persistState());
+      return false;
+    }
+    return true;
+  }
+
+  Future<bool> checkNode(String baseUrl) async {
+    try {
+      final uri = Uri.parse('${baseUrl.replaceAll(RegExp(r'/+$'), '')}/status');
+      final response = await http
+          .get(uri, headers: {'Content-Type': 'application/json'})
+          .timeout(requestTimeout);
+
+      if (response.statusCode != 200) {
+        _lastCheckError = 'HTTP ${response.statusCode} от ${_nodeShortLabel(baseUrl)}';
+        debugPrint('NodeProvider checkNode $baseUrl: $_lastCheckError');
+        return false;
+      }
+
+      final body = jsonDecode(response.body);
+      if (body is! Map<String, dynamic>) {
+        _lastCheckError = 'Неверный JSON от ${_nodeShortLabel(baseUrl)}';
+        debugPrint('NodeProvider checkNode $baseUrl: $_lastCheckError');
+        return false;
+      }
+
+      if (body['status'] != 'success') {
+        _lastCheckError = 'Статус ${body['status']} от ${_nodeShortLabel(baseUrl)}';
+        debugPrint('NodeProvider checkNode $baseUrl: $_lastCheckError');
+        return false;
+      }
+
+      _lastCheckError = null;
+      return true;
+    } on TimeoutException {
+      _lastCheckError =
+          'Таймаут ${_nodeShortLabel(baseUrl)} — включите Wi‑Fi в сети 192.168.0.x';
+      debugPrint('NodeProvider checkNode $baseUrl: $_lastCheckError');
+      return false;
+    } on SocketException catch (e) {
+      _lastCheckError =
+          '${e.message} (${_nodeShortLabel(baseUrl)}) — нужен Wi‑Fi в той же сети';
+      debugPrint('NodeProvider checkNode $baseUrl: $_lastCheckError');
+      return false;
+    } catch (e) {
+      _lastCheckError = '$e (${_nodeShortLabel(baseUrl)})';
+      debugPrint('NodeProvider checkNode $baseUrl: $_lastCheckError');
+      return false;
+    }
+  }
+
+  /// Проверяет все knownNodes и возвращает только отвечающие на /status.
+  Future<List<String>> refreshReachableNodes() async {
+    _scanningNodes = true;
+    notifyListeners();
+
+    try {
+      final checks = await Future.wait(
+        Config.knownNodes.map((node) async {
+          final ok = await checkNode(node);
+          return (node, ok);
+        }),
+      );
+
+      _reachableNodes = checks
+          .where((entry) => entry.$2)
+          .map((entry) => entry.$1)
+          .toList();
+
+      for (final entry in checks) {
+        if (entry.$2) {
+          markAvailable(entry.$1);
+        }
+      }
+
+      notifyListeners();
+      return _reachableNodes;
+    } finally {
+      _scanningNodes = false;
+      notifyListeners();
+    }
+  }
+
+  String labelFor(String node) => _nodeShortLabel(node);
+
+  Future<bool> findAndSwitchToAvailable({bool showSwitching = true}) async {
+    if (showSwitching) {
+      _isSwitching = true;
+      _switchingMessage = 'Поиск доступного узла...';
+      notifyListeners();
+    }
+
+    try {
+      final ordered = _orderedNodes();
+
+      for (final node in ordered) {
+        if (_isMarkedUnavailable(node)) continue;
+
+        _switchingMessage = 'Проверка ${_nodeShortLabel(node)}...';
+        notifyListeners();
+
+        if (await checkNode(node)) {
+          markAvailable(node);
+          _currentNode = node;
+          _allNodesOffline = false;
+          await _persistState();
+          notifyListeners();
+          return true;
+        }
+
+        markUnavailable(node);
+      }
+
+      _allNodesOffline = true;
+      notifyListeners();
+      return false;
+    } finally {
+      if (showSwitching) {
+        _isSwitching = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  List<String> _orderedNodes() {
+    final current = activeNode;
+    final startIndex = Config.knownNodes.indexOf(current);
+    if (startIndex < 0) return List<String>.from(Config.knownNodes);
+
+    return [
+      ...Config.knownNodes.skip(startIndex),
+      ...Config.knownNodes.take(startIndex),
+    ];
+  }
+
+  Future<bool> handleConnectionFailure(String failedNode) async {
+    markUnavailable(failedNode);
+    return findAndSwitchToAvailable(showSwitching: true);
+  }
+
+  /// Устанавливает активный узел после успешного входа.
+  Future<void> selectActiveNode(String node) async {
+    if (!Config.knownNodes.contains(node)) return;
+    _currentNode = node;
+    _allNodesOffline = false;
+    markAvailable(node);
+    await _persistState();
+    notifyListeners();
+  }
+
+  List<String> get nodesForLogin => _orderedNodes();
+
+  /// Узлы для повторных запросов: сначала активный, затем остальные.
+  List<String> get nodesForFailover => _orderedNodes();
+
+  static bool isConnectionError(Object error) {
+    if (error is TimeoutException) return true;
+    if (error is SocketException) return true;
+    if (error is http.ClientException) return true;
+    if (error is HandshakeException) return true;
+    if (error is HttpException) return true;
+    if (error is IOException) return true;
+
+    final message = error.toString().toLowerCase();
+    if (message.contains('connection refused') ||
+        message.contains('connection reset') ||
+        message.contains('connection closed') ||
+        message.contains('failed host lookup') ||
+        message.contains('network is unreachable') ||
+        message.contains('timed out') ||
+        message.contains('software caused connection abort')) {
+      return true;
+    }
+
+    return false;
+  }
+
+  String _nodeShortLabel(String node) {
+    try {
+      final uri = Uri.parse(node);
+      if (uri.port != 80 && uri.port != 443) return ':${uri.port}';
+      return uri.host;
+    } catch (_) {
+      return node;
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_instance == this) {
+      _instance = null;
+    }
+    super.dispose();
+  }
+}
