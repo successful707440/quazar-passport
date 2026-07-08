@@ -46,7 +46,7 @@ class ApiService {
     Future<T> Function(String baseUrl) request,
   ) async {
     final provider = NodeProvider.instance;
-    final nodes = provider?.nodesForFailover ?? Config.knownNodes;
+    final nodes = provider?.nodesForFailover ?? Config.defaultKnownNodes;
     Object? lastError;
 
     for (final node in nodes) {
@@ -242,7 +242,7 @@ class ApiService {
   /// Вход: перебирает все узлы — ключ может быть только на одном из них.
   static Future<Citizen> login(String citizenName, String apiKey) async {
     final provider = NodeProvider.instance;
-    final nodes = provider?.nodesForLogin ?? Config.knownNodes;
+    final nodes = provider?.nodesForLogin ?? Config.defaultKnownNodes;
     final trimmedName = citizenName.trim();
 
     var authRejected = false;

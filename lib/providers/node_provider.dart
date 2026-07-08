@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/server_settings.dart';
 import '../utils/config.dart';
 
 class NodeProvider extends ChangeNotifier {
@@ -18,11 +19,13 @@ class NodeProvider extends ChangeNotifier {
 
   /// Активный узел для API-запросов.
   static String get currentNode =>
-      _instance?._currentNode ?? Config.knownNodes.first;
+      _instance?._currentNode ?? _instance?.knownNodes.first ?? Config.defaultPrimaryUrl;
 
   static NodeProvider? get instance => _instance;
 
   String? _currentNode;
+  String? _primaryUrl;
+  String? _secondaryUrl;
   bool _isSwitching = false;
   bool _isInitialized = false;
   bool _allNodesOffline = false;
@@ -32,7 +35,18 @@ class NodeProvider extends ChangeNotifier {
   bool _scanningNodes = false;
   String? _lastCheckError;
 
-  String get activeNode => _currentNode ?? Config.knownNodes.first;
+  /// Список узлов: из настроек или значения по умолчанию.
+  List<String> get knownNodes {
+    return ServerSettings(
+      primaryUrl: _primaryUrl,
+      secondaryUrl: _secondaryUrl,
+    ).knownNodes;
+  }
+
+  String? get primaryUrl => _primaryUrl ?? Config.defaultPrimaryUrl;
+  String? get secondaryUrl => _secondaryUrl;
+
+  String get activeNode => _currentNode ?? knownNodes.first;
   String? get lastCheckError => _lastCheckError;
 
   String get unavailableMessage {
@@ -90,12 +104,15 @@ class NodeProvider extends ChangeNotifier {
 
   Future<void> _loadPersistedState() async {
     final prefs = await SharedPreferences.getInstance();
+    final settings = await ServerSettings.load();
+    _primaryUrl = settings.primaryUrl;
+    _secondaryUrl = settings.secondaryUrl;
 
     final last = prefs.getString(_keyLastNode);
-    if (last != null && Config.knownNodes.contains(last)) {
+    if (last != null && knownNodes.contains(last)) {
       _currentNode = last;
     } else {
-      _currentNode = Config.knownNodes.first;
+      _currentNode = knownNodes.first;
     }
 
     final deadJson = prefs.getString(_keyDeadUntil);
@@ -129,6 +146,67 @@ class NodeProvider extends ChangeNotifier {
     } catch (e) {
       debugPrint('NodeProvider persist error: $e');
     }
+  }
+
+  /// Нормализует URL: добавляет http:// при отсутствии схемы, убирает trailing slash.
+  static String _normalizeUrl(String raw) => ServerSettings.normalizeUrl(raw);
+
+  /// Проверяет формат URL.
+  static String? validateUrlFormat(String raw) =>
+      ServerSettings.validateUrlFormat(raw);
+
+  /// Сохраняет адреса серверов после проверки /status.
+  /// Возвращает null при успехе, иначе текст ошибки.
+  Future<String?> saveServerUrls({
+    required String primary,
+    String? secondary,
+  }) async {
+    final primaryNorm = _normalizeUrl(primary);
+    final formatError = validateUrlFormat(primaryNorm);
+    if (formatError != null) return formatError;
+
+    String? secondaryNorm;
+    if (secondary != null && secondary.trim().isNotEmpty) {
+      secondaryNorm = _normalizeUrl(secondary);
+      final secError = validateUrlFormat(secondaryNorm);
+      if (secError != null) return secError;
+      if (secondaryNorm == primaryNorm) {
+        return 'Вторичный адрес не должен совпадать с основным';
+      }
+    }
+
+    if (!await checkNode(primaryNorm)) {
+      return _lastCheckError ?? 'Основной сервер недоступен';
+    }
+
+    if (secondaryNorm != null && !await checkNode(secondaryNorm)) {
+      return 'Вторичный сервер недоступен: ${_lastCheckError ?? "нет ответа"}';
+    }
+
+    await ServerSettings.save(primary: primaryNorm, secondary: secondaryNorm);
+
+    _primaryUrl = primaryNorm;
+    _secondaryUrl = secondaryNorm;
+    _unavailableUntil.clear();
+
+    if (_currentNode == null || !knownNodes.contains(_currentNode)) {
+      _currentNode = primaryNorm;
+    }
+
+    await _persistState();
+    notifyListeners();
+    return null;
+  }
+
+  /// Сбрасывает адреса к значениям по умолчанию из config.dart.
+  Future<void> resetServerUrlsToDefaults() async {
+    await ServerSettings.clear();
+    _primaryUrl = null;
+    _secondaryUrl = null;
+    _currentNode = Config.defaultPrimaryUrl;
+    _unavailableUntil.clear();
+    await _persistState();
+    notifyListeners();
   }
 
   void markUnavailable(String node) {
@@ -204,7 +282,7 @@ class NodeProvider extends ChangeNotifier {
 
     try {
       final checks = await Future.wait(
-        Config.knownNodes.map((node) async {
+        knownNodes.map((node) async {
           final ok = await checkNode(node);
           return (node, ok);
         }),
@@ -272,12 +350,13 @@ class NodeProvider extends ChangeNotifier {
 
   List<String> _orderedNodes() {
     final current = activeNode;
-    final startIndex = Config.knownNodes.indexOf(current);
-    if (startIndex < 0) return List<String>.from(Config.knownNodes);
+    final nodes = knownNodes;
+    final startIndex = nodes.indexOf(current);
+    if (startIndex < 0) return List<String>.from(nodes);
 
     return [
-      ...Config.knownNodes.skip(startIndex),
-      ...Config.knownNodes.take(startIndex),
+      ...nodes.skip(startIndex),
+      ...nodes.take(startIndex),
     ];
   }
 
@@ -288,7 +367,7 @@ class NodeProvider extends ChangeNotifier {
 
   /// Устанавливает активный узел после успешного входа.
   Future<void> selectActiveNode(String node) async {
-    if (!Config.knownNodes.contains(node)) return;
+    if (!knownNodes.contains(node)) return;
     _currentNode = node;
     _allNodesOffline = false;
     markAvailable(node);

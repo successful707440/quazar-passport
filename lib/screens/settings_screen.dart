@@ -16,15 +16,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _loadingOnline = false;
   String? _onlineError;
 
+  final _primaryController = TextEditingController();
+  final _secondaryController = TextEditingController();
+  bool _savingUrls = false;
+  String? _urlSaveError;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
-        Provider.of<NodeProvider>(context, listen: false).refreshReachableNodes();
+        final nodes = Provider.of<NodeProvider>(context, listen: false);
+        _primaryController.text = nodes.primaryUrl ?? '';
+        _secondaryController.text = nodes.secondaryUrl ?? '';
+        nodes.refreshReachableNodes();
         _loadOnlineCitizens();
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _primaryController.dispose();
+    _secondaryController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadOnlineCitizens() async {
@@ -56,6 +71,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _refreshNodes() async {
     await Provider.of<NodeProvider>(context, listen: false).refreshReachableNodes();
+  }
+
+  Future<void> _saveServerUrls() async {
+    final nodes = Provider.of<NodeProvider>(context, listen: false);
+
+    setState(() {
+      _savingUrls = true;
+      _urlSaveError = null;
+    });
+
+    final error = await nodes.saveServerUrls(
+      primary: _primaryController.text,
+      secondary: _secondaryController.text,
+    );
+
+    if (!mounted) return;
+
+    if (error != null) {
+      setState(() {
+        _savingUrls = false;
+        _urlSaveError = error;
+      });
+      return;
+    }
+
+    ApiService.syncActiveNode();
+    await nodes.findAndSwitchToAvailable(showSwitching: false);
+    await _refreshNodes();
+
+    setState(() => _savingUrls = false);
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Адреса серверов сохранены'),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
+  Future<void> _resetServerUrls() async {
+    final nodes = Provider.of<NodeProvider>(context, listen: false);
+    await nodes.resetServerUrlsToDefaults();
+    _primaryController.text = nodes.primaryUrl ?? '';
+    _secondaryController.text = nodes.secondaryUrl ?? '';
+    ApiService.syncActiveNode();
+    await nodes.findAndSwitchToAvailable(showSwitching: false);
+    await _refreshNodes();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Адреса сброшены к значениям по умолчанию')),
+      );
+    }
   }
 
   Future<void> _clearData() async {
@@ -302,6 +371,85 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       child: const Text('Очистить все данные'),
                     ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Адрес сервера',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Основной и резервный узлы Quazar. Перед сохранением проверяется /status.',
+                    style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _primaryController,
+                    decoration: const InputDecoration(
+                      labelText: 'Основной адрес',
+                      hintText: 'http://192.168.0.20:8080',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.link),
+                    ),
+                    keyboardType: TextInputType.url,
+                    autocorrect: false,
+                    enabled: !_savingUrls,
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _secondaryController,
+                    decoration: const InputDecoration(
+                      labelText: 'Вторичный адрес (необязательно)',
+                      hintText: 'http://192.168.0.20:8081',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.link_off),
+                    ),
+                    keyboardType: TextInputType.url,
+                    autocorrect: false,
+                    enabled: !_savingUrls,
+                  ),
+                  if (_urlSaveError != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      _urlSaveError!,
+                      style: TextStyle(color: Colors.red.shade700, fontSize: 13),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: _savingUrls ? null : _saveServerUrls,
+                          icon: _savingUrls
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.save),
+                          label: Text(_savingUrls ? 'Проверка…' : 'Сохранить'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton(
+                        onPressed: _savingUrls ? null : _resetServerUrls,
+                        child: const Text('Сброс'),
+                      ),
+                    ],
                   ),
                 ],
               ),
