@@ -244,7 +244,11 @@ class AuthProvider extends ChangeNotifier {
     }
 
     final result = await BiometricService.authenticateForLogin();
-    if (!result.success) return false;
+    if (!result.success) {
+      _lastLoginError = result.errorMessage;
+      notifyListeners();
+      return false;
+    }
 
     _isLoading = true;
     _lastLoginError = null;
@@ -274,7 +278,7 @@ class AuthProvider extends ChangeNotifier {
       }
 
       await refreshCitizenProfile();
-      if (!_isLoggedIn || Constants.isRevokedStatus(_status)) {
+      if (Constants.isRevokedStatus(_status)) {
         _lastLoginError = Constants.accessDeniedRevoked;
         _citizenId = null;
         _apiKey = null;

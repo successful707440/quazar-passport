@@ -405,24 +405,9 @@ class ApiService {
     return events;
   }
 
+  /// События в очереди (алиас getPendingEvents).
   static Future<List<Event>> getEvents(String apiKey, {int limit = 50}) async {
-    final pending = await getPendingEvents(apiKey, limit: limit);
-    final confirmed = await getConfirmedEvents(apiKey, limit: limit);
-
-    final seen = <String>{};
-    final merged = <Event>[];
-
-    for (final event in [...pending, ...confirmed]) {
-      if (event.id.isEmpty || seen.contains(event.id)) continue;
-      seen.add(event.id);
-      merged.add(event);
-    }
-
-    merged.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-    if (merged.length > limit) {
-      return merged.sublist(0, limit);
-    }
-    return merged;
+    return getPendingEvents(apiKey, limit: limit);
   }
 
   /// Подтверждённые события из блокчейна (GET /blocks).

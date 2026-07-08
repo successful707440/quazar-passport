@@ -64,8 +64,8 @@ class EventsScreen extends StatelessWidget {
               child: Padding(
                 padding: EdgeInsets.all(32.0),
                 child: Text(
-                  'Нет событий\n\nЗдесь отображаются подтверждённые записи '
-                  'из блокчейна и события в очереди на включение в блок',
+                  'Нет событий в очереди\n\nЗдесь отображаются события, '
+                  'ожидающие включения в блок',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.grey),
                 ),

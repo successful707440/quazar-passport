@@ -20,12 +20,8 @@ class EventsProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _events = await ApiService.getEvents(auth.apiKey!);
-      if (_events.isEmpty) {
-        _error = 'Нет событий';
-      } else {
-        _error = null;
-      }
+      _events = await ApiService.getPendingEvents(auth.apiKey!);
+      _error = null;
     } on ApiException catch (e) {
       _error = e.message;
     } catch (e) {
