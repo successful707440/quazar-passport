@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'native_http.dart';
 import '../models/api_response.dart';
 import '../models/initiative.dart';
 import '../models/referendum.dart';
@@ -145,12 +146,15 @@ class ApiService {
           ? _authHeaders(apiKey)
           : {'Content-Type': 'application/json'};
 
-      final response = await http.get(uri, headers: headers).timeout(
-            NodeProvider.requestTimeout,
-          );
+      final response = await NativeHttp.get(
+        uri,
+        headers: headers,
+        timeout: NodeProvider.requestTimeout,
+      );
       return _parseResponse(response);
     });
   }
+
 
   static Future<ApiResponse> _post(
     String path, {
@@ -158,13 +162,12 @@ class ApiService {
     Map<String, dynamic>? body,
   }) async {
     return _withFailover((baseUrl) async {
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl$path'),
-            headers: _authHeaders(apiKey),
-            body: body != null ? jsonEncode(body) : null,
-          )
-          .timeout(NodeProvider.requestTimeout);
+      final response = await NativeHttp.post(
+        Uri.parse('$baseUrl$path'),
+        headers: _authHeaders(apiKey),
+        body: body != null ? jsonEncode(body) : null,
+        timeout: NodeProvider.requestTimeout,
+      );
 
       return _parseResponse(response);
     });
@@ -175,12 +178,11 @@ class ApiService {
     required String apiKey,
   }) async {
     return _withFailover((baseUrl) async {
-      final response = await http
-          .delete(
-            Uri.parse('$baseUrl$path'),
-            headers: _authHeaders(apiKey),
-          )
-          .timeout(NodeProvider.requestTimeout);
+      final response = await NativeHttp.delete(
+        Uri.parse('$baseUrl$path'),
+        headers: _authHeaders(apiKey),
+        timeout: NodeProvider.requestTimeout,
+      );
       return _parseResponse(response);
     });
   }
@@ -191,13 +193,12 @@ class ApiService {
     required Map<String, dynamic> body,
   }) async {
     return _withFailover((baseUrl) async {
-      final response = await http
-          .patch(
-            Uri.parse('$baseUrl$path'),
-            headers: _authHeaders(apiKey),
-            body: jsonEncode(body),
-          )
-          .timeout(NodeProvider.requestTimeout);
+      final response = await NativeHttp.patch(
+        Uri.parse('$baseUrl$path'),
+        headers: _authHeaders(apiKey),
+        body: jsonEncode(body),
+        timeout: NodeProvider.requestTimeout,
+      );
       return _parseResponse(response);
     });
   }
@@ -237,6 +238,81 @@ class ApiService {
       body: {'role': role},
     );
     return Citizen.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  /// Вход по паролю: POST /auth/login → api_key для дальнейших запросов.
+  static Future<Map<String, dynamic>> loginWithPassword(
+    String citizenName,
+    String password,
+  ) async {
+    final provider = NodeProvider.instance;
+    final nodes = provider?.nodesForLogin ?? Config.defaultKnownNodes;
+    final trimmedName = citizenName.trim();
+    Object? lastError;
+
+    for (final baseUrl in nodes) {
+      try {
+        final uri = Uri.parse('$baseUrl${Constants.endpointAuthLogin}');
+        final response = await NativeHttp.post(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'name': trimmedName,
+            'password': password.trim(),
+          }),
+          timeout: NodeProvider.requestTimeout,
+        );
+
+        final apiResponse = await _parseResponse(response);
+        final data = apiResponse.data;
+        if (data is! Map<String, dynamic>) {
+          throw ApiException('Неожиданный ответ сервера');
+        }
+
+        if (provider != null && provider.activeNode != baseUrl) {
+          await provider.selectActiveNode(baseUrl);
+        }
+        syncActiveNode();
+        return data;
+      } on ApiException catch (e) {
+        lastError = e;
+        if (NodeProvider.isConnectionError(e)) {
+          provider?.markUnavailable(baseUrl);
+          continue;
+        }
+        rethrow;
+      } catch (e) {
+        lastError = e;
+        if (NodeProvider.isConnectionError(e)) {
+          provider?.markUnavailable(baseUrl);
+          continue;
+        }
+        rethrow;
+      }
+    }
+
+    if (lastError != null) throw lastError;
+    throw ApiException('Нет доступных узлов для входа');
+  }
+
+  /// Установка или смена пароля (требуется API-ключ гражданина).
+  static Future<void> setPassword(String apiKey, String password) async {
+    await _post(
+      Constants.endpointAuthSetPassword,
+      apiKey: apiKey,
+      body: {'password': password.trim()},
+    );
+  }
+
+  /// Проверка, задан ли пароль у гражданина (публичный эндпоинт).
+  static Future<bool> checkHasPassword(String citizenName) async {
+    final response = await _get(
+      Constants.endpointAuthCheck,
+      query: {'name': citizenName.trim()},
+    );
+    final data = response.data;
+    if (data is! Map<String, dynamic>) return false;
+    return data['has_password'] as bool? ?? false;
   }
 
   /// Вход: перебирает все узлы — ключ может быть только на одном из них.
@@ -337,9 +413,11 @@ class ApiService {
         ? _authHeaders(apiKey)
         : {'Content-Type': 'application/json'};
 
-    final response = await http.get(uri, headers: headers).timeout(
-          NodeProvider.requestTimeout,
-        );
+    final response = await NativeHttp.get(
+      uri,
+      headers: headers,
+      timeout: NodeProvider.requestTimeout,
+    );
     return _parseResponse(response);
   }
 

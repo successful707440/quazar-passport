@@ -44,6 +44,10 @@ class Constants {
   static const String endpointChatMessages = '/chat/messages';
   static const String endpointChatSend = '/chat/send';
 
+  static const String endpointAuthLogin = '/auth/login';
+  static const String endpointAuthSetPassword = '/auth/set-password';
+  static const String endpointAuthCheck = '/auth/check';
+
   /// Внутренняя валюта государства Квазар
   static const String currencyName = 'Квази';
 

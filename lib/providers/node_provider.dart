@@ -6,13 +6,14 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/native_http.dart';
 import '../services/server_settings.dart';
 import '../utils/config.dart';
 
 class NodeProvider extends ChangeNotifier {
   static NodeProvider? _instance;
 
-  static const Duration requestTimeout = Duration(seconds: 4);
+  static const Duration requestTimeout = Duration(seconds: 12);
   static const Duration unavailableTtl = Duration(seconds: 30);
   static const String _keyLastNode = 'last_active_node';
   static const String _keyDeadUntil = 'dead_nodes_until';
@@ -233,9 +234,11 @@ class NodeProvider extends ChangeNotifier {
   Future<bool> checkNode(String baseUrl) async {
     try {
       final uri = Uri.parse('${baseUrl.replaceAll(RegExp(r'/+$'), '')}/status');
-      final response = await http
-          .get(uri, headers: {'Content-Type': 'application/json'})
-          .timeout(requestTimeout);
+      final response = await NativeHttp.get(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        timeout: requestTimeout,
+      );
 
       if (response.statusCode != 200) {
         _lastCheckError = 'HTTP ${response.statusCode} от ${_nodeShortLabel(baseUrl)}';
@@ -243,8 +246,24 @@ class NodeProvider extends ChangeNotifier {
         return false;
       }
 
-      final body = jsonDecode(response.body);
-      if (body is! Map<String, dynamic>) {
+      final bodyText = response.body;
+      if (bodyText.isEmpty) {
+        _lastCheckError =
+            'Пустой ответ от ${_nodeShortLabel(baseUrl)} — проверьте адрес узла';
+        debugPrint('NodeProvider checkNode $baseUrl: $_lastCheckError');
+        return false;
+      }
+
+      Map<String, dynamic> body;
+      try {
+        final decoded = jsonDecode(bodyText);
+        if (decoded is! Map<String, dynamic>) {
+          _lastCheckError = 'Неверный JSON от ${_nodeShortLabel(baseUrl)}';
+          debugPrint('NodeProvider checkNode $baseUrl: $_lastCheckError');
+          return false;
+        }
+        body = decoded;
+      } on FormatException {
         _lastCheckError = 'Неверный JSON от ${_nodeShortLabel(baseUrl)}';
         debugPrint('NodeProvider checkNode $baseUrl: $_lastCheckError');
         return false;
@@ -260,7 +279,7 @@ class NodeProvider extends ChangeNotifier {
       return true;
     } on TimeoutException {
       _lastCheckError =
-          'Таймаут ${_nodeShortLabel(baseUrl)} — включите Wi‑Fi в сети 192.168.0.x';
+          'Таймаут ${_nodeShortLabel(baseUrl)} — проверьте Wi‑Fi (та же сеть, что ПК) и отключите мобильный интернет';
       debugPrint('NodeProvider checkNode $baseUrl: $_lastCheckError');
       return false;
     } on SocketException catch (e) {

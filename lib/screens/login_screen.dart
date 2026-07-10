@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
@@ -14,32 +16,72 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
+  final _passwordController = TextEditingController();
   final _apiKeyController = TextEditingController();
+  bool _obscurePassword = true;
   bool _obscureApiKey = true;
+  bool _useApiKeyMode = false;
   String? _serverStatus;
+  String? _loginErrorMessage;
+  Timer? _loginErrorTimer;
 
   @override
   void initState() {
     super.initState();
     _checkServer();
+    _nameController.addListener(_onLoginFieldChanged);
+    _passwordController.addListener(_onLoginFieldChanged);
+    _apiKeyController.addListener(_onLoginFieldChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _showStoredLoginError();
+      _consumeStoredLoginError();
       _tryBiometricLogin();
     });
   }
 
-  void _showStoredLoginError() {
+  void _onLoginFieldChanged() {
+    if (_loginErrorMessage != null) {
+      _clearLoginError();
+    }
+  }
+
+  void _consumeStoredLoginError() {
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final message = auth.lastLoginError;
     if (message == null || !mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red,
-        duration: const Duration(seconds: 5),
-      ),
-    );
+    auth.clearLoginError();
+    _showLoginError(message);
+  }
+
+  void _showLoginError(String message) {
+    _loginErrorTimer?.cancel();
+
+    final suggestsApiKey = message.contains('Пароль не задан') ||
+        message.contains('API-ключ');
+
+    setState(() {
+      _loginErrorMessage = suggestsApiKey
+          ? '$message\nНажмите «Забыл пароль» для входа по API-ключу'
+          : message;
+    });
+
+    _loginErrorTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted) {
+        setState(() => _loginErrorMessage = null);
+      }
+    });
+  }
+
+  void _clearLoginError() {
+    _loginErrorTimer?.cancel();
+    _loginErrorTimer = null;
+    if (_loginErrorMessage == null) return;
+    setState(() => _loginErrorMessage = null);
+  }
+
+  void _switchLoginMode(bool useApiKey) {
+    _clearLoginError();
+    setState(() => _useApiKeyMode = useApiKey);
   }
 
   Future<void> _checkServer() async {
@@ -66,16 +108,38 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
+    _loginErrorTimer?.cancel();
+    _nameController.removeListener(_onLoginFieldChanged);
+    _passwordController.removeListener(_onLoginFieldChanged);
+    _apiKeyController.removeListener(_onLoginFieldChanged);
     _nameController.dispose();
+    _passwordController.dispose();
     _apiKeyController.dispose();
     super.dispose();
   }
 
-  Future<void> _handleLogin() async {
+  Future<void> _handlePasswordLogin() async {
     if (!_formKey.currentState!.validate()) return;
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final success = await authProvider.login(
+      _nameController.text.trim(),
+      _passwordController.text,
+    );
+
+    if (!success && mounted) {
+      final message = authProvider.lastLoginError ??
+          'Не удалось войти. Проверьте имя гражданина и пароль';
+      authProvider.clearLoginError();
+      _showLoginError(message);
+    }
+  }
+
+  Future<void> _handleApiKeyLogin() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final success = await authProvider.loginWithApiKey(
       _nameController.text.trim(),
       _apiKeyController.text.trim(),
     );
@@ -83,12 +147,8 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!success && mounted) {
       final message = authProvider.lastLoginError ??
           'Не удалось войти. Проверьте имя гражданина и API-ключ';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: Colors.red,
-        ),
-      );
+      authProvider.clearLoginError();
+      _showLoginError(message);
     }
   }
 
@@ -104,20 +164,26 @@ class _LoginScreenState extends State<LoginScreen> {
       }
       final message = auth.lastLoginError;
       if (message != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(message),
-            backgroundColor: Colors.red,
-          ),
-        );
+        auth.clearLoginError();
+        _showLoginError(message);
       }
     }
+  }
+
+  String? _validateCitizenName(String? value) {
+    if (value == null || value.trim().isEmpty) {
+      return 'Введите имя гражданина';
+    }
+    if (!RegExp(r'^[A-Za-z]+$').hasMatch(value.trim())) {
+      return 'Только латинские буквы';
+    }
+    return null;
   }
 
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context);
-    final showBiometric = auth.canUseBiometricLogin;
+    final showBiometric = auth.canUseBiometricLogin && !_useApiKeyMode;
 
     if (showBiometric &&
         auth.citizenName != null &&
@@ -126,21 +192,24 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Colors.deepPurple.shade900,
-              Colors.deepPurple.shade500,
-              Colors.purple.shade300,
-            ],
+      body: GestureDetector(
+        onTap: _clearLoginError,
+        behavior: HitTestBehavior.translucent,
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Colors.deepPurple.shade900,
+                Colors.deepPurple.shade500,
+                Colors.purple.shade300,
+              ],
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
+          child: SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
               padding: const EdgeInsets.all(24.0),
               child: Card(
                 elevation: 8,
@@ -157,7 +226,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         Icon(
                           showBiometric
                               ? Icons.fingerprint
-                              : Icons.assignment_ind,
+                              : _useApiKeyMode
+                                  ? Icons.vpn_key
+                                  : Icons.assignment_ind,
                           size: 80,
                           color: Colors.deepPurple.shade700,
                         ),
@@ -170,6 +241,16 @@ class _LoginScreenState extends State<LoginScreen> {
                             color: Colors.deepPurple.shade900,
                           ),
                         ),
+                        if (_useApiKeyMode) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'Вход по API-ключу',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
                         if (_serverStatus != null) ...[
                           const SizedBox(height: 12),
                           Text(
@@ -181,6 +262,10 @@ class _LoginScreenState extends State<LoginScreen> {
                                   : Colors.orange.shade800,
                             ),
                           ),
+                        ],
+                        if (_loginErrorMessage != null) ...[
+                          const SizedBox(height: 12),
+                          _buildLoginErrorBanner(),
                         ],
                         if (showBiometric) ...[
                           const SizedBox(height: 20),
@@ -219,7 +304,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 padding:
                                     const EdgeInsets.symmetric(horizontal: 12),
                                 child: Text(
-                                  'или введите ключ',
+                                  'или введите пароль',
                                   style: TextStyle(
                                     color: Colors.grey.shade600,
                                     fontSize: 12,
@@ -239,57 +324,47 @@ class _LoginScreenState extends State<LoginScreen> {
                           controller: _nameController,
                           decoration: const InputDecoration(
                             labelText: 'Имя гражданина',
-                            hintText: 'successful',
                             prefixIcon: Icon(Icons.badge),
                             border: OutlineInputBorder(),
                           ),
-                          validator: (value) {
-                            if (value == null || value.trim().isEmpty) {
-                              return 'Введите имя гражданина';
-                            }
-                            if (!RegExp(r'^[A-Za-z]+$')
-                                .hasMatch(value.trim())) {
-                              return 'Только латинские буквы';
-                            }
-                            return null;
-                          },
+                          validator: _validateCitizenName,
                         ),
                         const SizedBox(height: 16),
-                        TextFormField(
-                          controller: _apiKeyController,
-                          obscureText: _obscureApiKey,
-                          decoration: InputDecoration(
-                            labelText: 'API-ключ',
-                            hintText: 'successful_app_key_2026',
-                            prefixIcon: const Icon(Icons.key),
-                            border: const OutlineInputBorder(),
-                            suffixIcon: IconButton(
-                              icon: Icon(
-                                _obscureApiKey
-                                    ? Icons.visibility_off
-                                    : Icons.visibility,
+                        if (_useApiKeyMode) ...[
+                          TextFormField(
+                            controller: _apiKeyController,
+                            obscureText: _obscureApiKey,
+                            decoration: InputDecoration(
+                              labelText: 'API-ключ',
+                              prefixIcon: const Icon(Icons.vpn_key),
+                              border: const OutlineInputBorder(),
+                              suffixIcon: IconButton(
+                                icon: Icon(
+                                  _obscureApiKey
+                                      ? Icons.visibility_off
+                                      : Icons.visibility,
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    _obscureApiKey = !_obscureApiKey;
+                                  });
+                                },
                               ),
-                              onPressed: () {
-                                setState(() {
-                                  _obscureApiKey = !_obscureApiKey;
-                                });
-                              },
                             ),
+                            validator: (value) {
+                              if (value == null || value.trim().isEmpty) {
+                                return 'Введите API-ключ';
+                              }
+                              return null;
+                            },
                           ),
-                          validator: (value) {
-                            if (value == null || value.trim().isEmpty) {
-                              return 'Введите API-ключ';
-                            }
-                            return null;
-                          },
-                        ),
-                        if (!showBiometric) ...[
                           const SizedBox(height: 24),
                           SizedBox(
                             width: double.infinity,
                             height: 50,
                             child: ElevatedButton(
-                              onPressed: auth.isLoading ? null : _handleLogin,
+                              onPressed:
+                                  auth.isLoading ? null : _handleApiKeyLogin,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: Colors.deepPurple.shade700,
                                 foregroundColor: Colors.white,
@@ -301,12 +376,81 @@ class _LoginScreenState extends State<LoginScreen> {
                                   : const Text('Войти'),
                             ),
                           ),
-                        ] else ...[
                           const SizedBox(height: 8),
                           TextButton(
-                            onPressed: auth.isLoading ? null : _handleLogin,
-                            child: const Text('Войти с API-ключом'),
+                            onPressed: auth.isLoading
+                                ? null
+                                : () => _switchLoginMode(false),
+                            child: const Text('Войти по паролю'),
                           ),
+                        ] else ...[
+                          TextFormField(
+                            controller: _passwordController,
+                            obscureText: _obscurePassword,
+                            decoration: InputDecoration(
+                              labelText: 'Пароль',
+                              prefixIcon: const Icon(Icons.lock),
+                              border: const OutlineInputBorder(),
+                              suffixIcon: IconButton(
+                                icon: Icon(
+                                  _obscurePassword
+                                      ? Icons.visibility_off
+                                      : Icons.visibility,
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    _obscurePassword = !_obscurePassword;
+                                  });
+                                },
+                              ),
+                            ),
+                            validator: (value) {
+                              if (value == null || value.isEmpty) {
+                                return 'Введите пароль';
+                              }
+                              return null;
+                            },
+                          ),
+                          if (!showBiometric) ...[
+                            const SizedBox(height: 24),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 50,
+                              child: ElevatedButton(
+                                onPressed:
+                                    auth.isLoading ? null : _handlePasswordLogin,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.deepPurple.shade700,
+                                  foregroundColor: Colors.white,
+                                ),
+                                child: auth.isLoading
+                                    ? const CircularProgressIndicator(
+                                        color: Colors.white,
+                                      )
+                                    : const Text('Войти'),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            TextButton(
+                              onPressed: auth.isLoading
+                                  ? null
+                                  : () => _switchLoginMode(true),
+                              child: const Text('Забыл пароль'),
+                            ),
+                          ] else ...[
+                            const SizedBox(height: 8),
+                            TextButton(
+                              onPressed:
+                                  auth.isLoading ? null : _handlePasswordLogin,
+                              child: const Text('Войти с паролем'),
+                            ),
+                            TextButton(
+                              onPressed: auth.isLoading
+                                  ? null
+                                  : () => _switchLoginMode(true),
+                              child: const Text('Забыл пароль'),
+                            ),
+                          ],
                         ],
                       ],
                     ),
@@ -315,6 +459,56 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
           ),
+        ),
+      ),
+    ),
+    );
+  }
+
+  Widget _buildLoginErrorBanner() {
+    final message = _loginErrorMessage;
+    if (message == null) return const SizedBox.shrink();
+
+    final suggestsApiKey = message.contains('API-ключ');
+
+    return Material(
+      color: Colors.red.shade50,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.error_outline, color: Colors.red.shade700, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(
+                  color: Colors.red.shade900,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+            if (suggestsApiKey)
+              TextButton(
+                onPressed: () => _switchLoginMode(true),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.red.shade800,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('API-ключ'),
+              ),
+            IconButton(
+              icon: Icon(Icons.close, color: Colors.red.shade700, size: 18),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              onPressed: _clearLoginError,
+              tooltip: 'Закрыть',
+            ),
+          ],
         ),
       ),
     );

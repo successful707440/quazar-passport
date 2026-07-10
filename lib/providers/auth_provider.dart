@@ -46,6 +46,12 @@ class AuthProvider extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get lastLoginError => _lastLoginError;
 
+  void clearLoginError() {
+    if (_lastLoginError == null) return;
+    _lastLoginError = null;
+    notifyListeners();
+  }
+
   AuthProvider();
 
   void _applyCitizenProfile(Citizen citizen) {
@@ -189,7 +195,7 @@ class AuthProvider extends ChangeNotifier {
     _hasStoredCredentials = true;
   }
 
-  Future<bool> login(String citizenName, String apiKey) async {
+  Future<bool> loginWithApiKey(String citizenName, String apiKey) async {
     _isLoading = true;
     _lastLoginError = null;
     notifyListeners();
@@ -203,14 +209,58 @@ class AuthProvider extends ChangeNotifier {
         return false;
       }
 
-      final citizen =
-          await ApiService.login(citizenName.trim(), apiKey.trim());
-      _ensureCitizenCanAccess(citizen);
       final profile =
-          await ApiService.getCitizen(apiKey.trim(), citizen.id);
+          await ApiService.login(citizenName.trim(), apiKey.trim());
       _ensureCitizenCanAccess(profile);
       await _saveSession(profile, apiKey.trim());
       await ApiService.sendOnlineStatus(apiKey.trim(), profile.id, true);
+
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } on ApiException catch (e) {
+      debugPrint('API key login error: $e');
+      _lastLoginError = e.message;
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    } catch (e) {
+      debugPrint('API key login error: $e');
+      _lastLoginError = NodeProvider.isConnectionError(e)
+          ? 'Узлы недоступны. Проверьте сеть и адреса узлов в настройках'
+          : 'Не удалось войти: $e';
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> login(String citizenName, String password) async {
+    _isLoading = true;
+    _lastLoginError = null;
+    notifyListeners();
+
+    try {
+      if (!await _ensureNodeReady()) {
+        _lastLoginError =
+            'Узлы недоступны. Проверьте сеть и адреса узлов в настройках';
+        _isLoading = false;
+        notifyListeners();
+        return false;
+      }
+
+      final loginData =
+          await ApiService.loginWithPassword(citizenName.trim(), password.trim());
+      final apiKey = loginData['api_key'] as String? ?? '';
+      final citizenId = loginData['citizen_id'] as String? ?? '';
+      if (apiKey.isEmpty || citizenId.isEmpty) {
+        throw ApiException('Неожиданный ответ сервера');
+      }
+
+      final profile = await ApiService.getCitizen(apiKey, citizenId);
+      _ensureCitizenCanAccess(profile);
+      await _saveSession(profile, apiKey);
+      await ApiService.sendOnlineStatus(apiKey, profile.id, true);
 
       _isLoading = false;
       notifyListeners();
@@ -229,6 +279,20 @@ class AuthProvider extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
       return false;
+    }
+  }
+
+  Future<String?> setPassword(String password) async {
+    if (_apiKey == null) {
+      return 'Сначала войдите в систему';
+    }
+    try {
+      await ApiService.setPassword(_apiKey!, password);
+      return null;
+    } on ApiException catch (e) {
+      return e.message;
+    } catch (e) {
+      return 'Не удалось сохранить пароль: $e';
     }
   }
 
@@ -431,7 +495,7 @@ class AuthProvider extends ChangeNotifier {
         return status;
       }
       if (!_isLoggedIn && !_hasStoredCredentials) {
-        return 'Сначала войдите с API-ключом';
+        return 'Сначала войдите с паролем';
       }
 
       if (_isLoggedIn &&

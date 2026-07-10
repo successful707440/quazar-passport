@@ -15,6 +15,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<Map<String, dynamic>> _onlineCitizens = [];
   bool _loadingOnline = false;
   String? _onlineError;
+  bool? _hasPassword;
+  bool _checkingPassword = false;
 
   final _primaryController = TextEditingController();
   final _secondaryController = TextEditingController();
@@ -31,8 +33,135 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _secondaryController.text = nodes.secondaryUrl ?? '';
         nodes.refreshReachableNodes();
         _loadOnlineCitizens();
+        _checkPasswordStatus();
       }
     });
+  }
+
+  Future<void> _checkPasswordStatus() async {
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    if (auth.citizenName == null) return;
+
+    setState(() => _checkingPassword = true);
+    try {
+      final has = await ApiService.checkHasPassword(auth.citizenName!);
+      if (mounted) {
+        setState(() {
+          _hasPassword = has;
+          _checkingPassword = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _checkingPassword = false);
+      }
+    }
+  }
+
+  Future<void> _showSetPasswordDialog() async {
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    final passwordController = TextEditingController();
+    final confirmController = TextEditingController();
+    bool obscure = true;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text(
+                _hasPassword == true ? 'Сменить пароль' : 'Задать пароль',
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: passwordController,
+                    obscureText: obscure,
+                    decoration: InputDecoration(
+                      labelText: 'Новый пароль',
+                      border: const OutlineInputBorder(),
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          obscure ? Icons.visibility_off : Icons.visibility,
+                        ),
+                        onPressed: () {
+                          setDialogState(() => obscure = !obscure);
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: confirmController,
+                    obscureText: obscure,
+                    decoration: const InputDecoration(
+                      labelText: 'Подтвердите пароль',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('Отмена'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('Сохранить'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (saved != true || !mounted) return;
+
+    final password = passwordController.text;
+    final confirm = confirmController.text;
+    passwordController.dispose();
+    confirmController.dispose();
+
+    if (password.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Пароль должен быть не короче 6 символов'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    if (password != confirm) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Пароли не совпадают'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final error = await auth.setPassword(password);
+    if (!mounted) return;
+
+    if (error != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error), backgroundColor: Colors.red),
+      );
+      return;
+    }
+
+    setState(() => _hasPassword = true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Пароль сохранён'),
+        backgroundColor: Colors.green,
+      ),
+    );
   }
 
   @override
@@ -235,6 +364,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
+                    'Пароль',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  ListTile(
+                    leading: Icon(
+                      _hasPassword == true ? Icons.lock : Icons.lock_open,
+                      color: _hasPassword == true
+                          ? Colors.green
+                          : Colors.orange,
+                    ),
+                    title: Text(
+                      _checkingPassword
+                          ? 'Проверка…'
+                          : _hasPassword == true
+                              ? 'Пароль задан'
+                              : _hasPassword == false
+                                  ? 'Пароль не задан'
+                                  : 'Статус неизвестен',
+                    ),
+                    subtitle: const Text(
+                      'Пароль используется для входа в приложение',
+                    ),
+                  ),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: auth.isLoggedIn ? _showSetPasswordDialog : null,
+                      icon: const Icon(Icons.password),
+                      label: Text(
+                        _hasPassword == true
+                            ? 'Сменить пароль'
+                            : 'Задать пароль',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
                     'Профиль',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
@@ -357,7 +534,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 8),
                   const Text(
                     'Очистка всех данных приведёт к выходу из системы '
-                    'и удалению сохранённого API-ключа.',
+                    'и удалению сохранённых учётных данных.',
                     style: TextStyle(fontSize: 14, color: Colors.red),
                   ),
                   const SizedBox(height: 16),
